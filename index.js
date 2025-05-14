@@ -104,7 +104,7 @@ client.on(Events.MessageCreate, async (message) => {
       
       try {
         const warning = await message.channel.send({
-          content: `No send link again for this channel, i dey watch u 👀`
+          content: `No links allowed in this channel,thanks for understanding.`
         });
         
         setTimeout(() => {
