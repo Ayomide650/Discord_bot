@@ -1,11 +1,15 @@
+// index.js - Updated to handle edited messages and enforce link restrictions
+
 import { Client, Events, GatewayIntentBits, Collection, PermissionFlagsBits } from 'discord.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import config from './config.js';
+import dotenv from 'dotenv';
 import { keepAlive } from './server.js';
 
-// Emulate __dirname in ES modules
+dotenv.config(); // Load .env variables
+
+// __dirname workaround for ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -19,24 +23,23 @@ const client = new Client({
   ],
 });
 
+// Prevent multiple responses to the same message
 const processedMessages = new Set();
-setInterval(() => {
-  processedMessages.clear();
-}, 3600000); // Clear every hour
+setInterval(() => processedMessages.clear(), 3600000); // Clear every hour
 
 const linkRegex = /(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi;
 
+// Check admin status
 function isAdmin(member) {
   return member.permissions.has(PermissionFlagsBits.Administrator);
 }
 
+// Handle links in disallowed channels
 async function handleLinkRestriction(message) {
-  const disallowedChannels = config.DISALLOWED_CHANNEL_IDS || [];
-  if (!Array.isArray(disallowedChannels) || disallowedChannels.length === 0) return false;
+  const disallowedChannels = process.env.DISALLOWED_CHANNEL_IDS?.split(',') || [];
   if (!disallowedChannels.includes(message.channelId)) return false;
 
   linkRegex.lastIndex = 0;
-
   if (linkRegex.test(message.content)) {
     if (message.member && isAdmin(message.member)) {
       console.log(`👑 Admin ${message.author.tag} sent a link in #${message.channel.name} - allowed`);
@@ -46,14 +49,12 @@ async function handleLinkRestriction(message) {
     try {
       await message.delete();
       const warning = await message.channel.send({
-        content: `${message.author}, links are not allowed in this channel.`
+        content: `${message.author}, links are not allowed in this channel.`,
       });
 
       setTimeout(() => {
         warning.delete().catch(err => {
-          if (err.code !== 10008) {
-            console.error('Error deleting warning:', err);
-          }
+          if (err.code !== 10008) console.error('Error deleting warning:', err);
         });
       }, 5000);
 
@@ -68,28 +69,30 @@ async function handleLinkRestriction(message) {
   return false;
 }
 
-// Load commands
+// Command handling setup
 client.commands = new Collection();
 const commandsPath = path.join(__dirname, 'commands');
 const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+
 for (const file of commandFiles) {
   const filePath = path.join(commandsPath, file);
-  const command = await import(`./commands/${file}`);
+  const command = await import(`file://${filePath}`);
   if ('data' in command && 'execute' in command) {
     client.commands.set(command.data.name, command);
   } else {
-    console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+    console.log(`[WARNING] The command at ${filePath} is missing "data" or "execute".`);
   }
 }
 
 client.once(Events.ClientReady, c => {
   console.log(`Ready! Logged in as ${c.user.tag}`);
-  const disallowedChannels = config.DISALLOWED_CHANNEL_IDS || [];
-  if (Array.isArray(disallowedChannels) && disallowedChannels.length > 0) {
+  const disallowedChannels = process.env.DISALLOWED_CHANNEL_IDS?.split(',') || [];
+  if (disallowedChannels.length > 0) {
     console.log(`🛑 Link restriction active in channels: ${disallowedChannels.join(', ')}`);
   }
 });
 
+// Slash command handler
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
   const command = interaction.client.commands.get(interaction.commandName);
@@ -101,27 +104,30 @@ client.on(Events.InteractionCreate, async interaction => {
     await command.execute(interaction);
   } catch (error) {
     console.error(error);
-    const msg = { content: 'There was an error while executing this command!', ephemeral: true };
+    const replyOpts = { content: 'There was an error while executing this command!', ephemeral: true };
     if (interaction.replied || interaction.deferred) {
-      await interaction.followUp(msg);
+      await interaction.followUp(replyOpts);
     } else {
-      await interaction.reply(msg);
+      await interaction.reply(replyOpts);
     }
   }
 });
 
+// Handle new messages
 client.on(Events.MessageCreate, async message => {
   const linkHandled = await handleLinkRestriction(message);
   if (linkHandled) return;
+
   if (message.author.bot) return;
   if (processedMessages.has(message.id)) return;
 
   const botMentioned = message.mentions.users.has(client.user.id);
-  const isActiveChannel = message.channelId === config.ACTIVE_CHANNEL_ID;
+  const isActiveChannel = message.channelId === process.env.ACTIVE_CHANNEL_ID;
 
   if ((isActiveChannel || botMentioned) && message.content.trim() !== '') {
     try {
       processedMessages.add(message.id);
+
       const messageContent = message.content.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '').trim();
       if (messageContent === '') return;
 
@@ -151,10 +157,14 @@ client.on(Events.MessageCreate, async message => {
   }
 });
 
+// Handle edited messages
 client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
   if (newMessage.author?.bot) return;
   await handleLinkRestriction(newMessage);
 });
 
+// Start the keep-alive server (uses PORT from .env)
 keepAlive();
-client.login(config.BOT_TOKEN);
+
+// Log in to Discord
+client.login(process.env.BOT_TOKEN);
