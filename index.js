@@ -64,23 +64,43 @@ client.on(Events.MessageCreate, async (message) => {
       const cooldown = userChannelCooldowns.get(cooldownKey) || 0;
       
       // Delete the message regardless of cooldown
-      await message.delete();
-      console.log(`🧹 Deleted link from ${message.author.tag}`);
+      try {
+        await message.delete();
+        console.log(`🧹 Deleted link from ${message.author.tag} in ${message.channel.name}`);
+      } catch (deleteErr) {
+        // Check if this is the "Unknown Message" error (already deleted)
+        if (deleteErr.code === 10008) {
+          // Message already deleted, just ignore silently
+          console.log(`⚠️ Message was already deleted in ${message.channel.name}`);
+        } else {
+          // Log other delete errors
+          console.error('❌ Failed to delete message:', deleteErr.message);
+        }
+      }
       
       // Only send warning if not on cooldown
       if (now - cooldown >= 5000) { // 5 second cooldown for warnings
         userChannelCooldowns.set(cooldownKey, now);
         
-        const warning = await message.channel.send({
-          content: `${message.author}, links are not allowed here.`
-        });
-        
-        setTimeout(() => {
-          warning.delete().catch(() => {});
-        }, 5000);
+        try {
+          const warning = await message.channel.send({
+            content: `No send link again for this channel, i dey watch u 👀`
+          });
+          
+          setTimeout(() => {
+            warning.delete().catch((warnDeleteErr) => {
+              // Silently fail if warning deletion fails
+              if (warnDeleteErr.code !== 10008) {
+                console.error('⚠️ Could not delete warning message:', warnDeleteErr.message);
+              }
+            });
+          }, 5000);
+        } catch (warnErr) {
+          console.error('❌ Failed to send warning:', warnErr.message);
+        }
       }
     } catch (err) {
-      console.error('❌ Failed to delete message:', err);
+      console.error('❌ Unexpected error in message processing:', err);
     }
   }
 });
