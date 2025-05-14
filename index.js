@@ -25,10 +25,13 @@ const client = new Client({
 
 const CONFIG = {
   disallowedChannelIds: process.env.DISALLOWED_CHANNEL_IDS?.split(',') || [],
-  linkRegex: /(https?:\/\/[^\s]+)/gi
+  // We'll create a function to get a fresh regex each time to avoid the 'g' flag issue
+  getLinkRegex: () => /(https?:\/\/[^\s]+)/gi
 };
 
-const userCooldowns = new Map();
+// Track cooldowns per channel+user instead of just per user
+// This prevents the cooldown from being global across all channels
+const userChannelCooldowns = new Map();
 
 client.once(Events.ClientReady, (c) => {
   console.log(`✅ Logged in as ${c.user.tag}`);
@@ -43,25 +46,39 @@ client.on(Events.MessageCreate, async (message) => {
     return message.reply('🏓 Pong!');
   }
 
-  const now = Date.now();
-  const cooldown = userCooldowns.get(message.author.id) || 0;
-  if (now - cooldown < 1000) return; // 1 second cooldown
-  userCooldowns.set(message.author.id, now);
-
+  // Check if this is a disallowed channel
   const isDisallowed = CONFIG.disallowedChannelIds.includes(message.channelId);
-  if (isDisallowed && CONFIG.linkRegex.test(message.content)) {
+  if (!isDisallowed) return;
+
+  // Get a fresh regex for each message to avoid the lastIndex issue with 'g' flag
+  const linkRegex = CONFIG.getLinkRegex();
+  
+  // Check if message contains links
+  if (linkRegex.test(message.content)) {
     try {
+      // Create a unique key for each user+channel combination for cooldown
+      const cooldownKey = `${message.channelId}-${message.author.id}`;
+      
+      // Check if user+channel is on cooldown
+      const now = Date.now();
+      const cooldown = userChannelCooldowns.get(cooldownKey) || 0;
+      
+      // Delete the message regardless of cooldown
       await message.delete();
-
-      const warning = await message.channel.send({
-        content: `${message.author}, links are not allowed here.`
-      });
-
-      setTimeout(() => {
-        warning.delete().catch(() => {});
-      }, 5000);
-
       console.log(`🧹 Deleted link from ${message.author.tag}`);
+      
+      // Only send warning if not on cooldown
+      if (now - cooldown >= 5000) { // 5 second cooldown for warnings
+        userChannelCooldowns.set(cooldownKey, now);
+        
+        const warning = await message.channel.send({
+          content: `${message.author}, links are not allowed here.`
+        });
+        
+        setTimeout(() => {
+          warning.delete().catch(() => {});
+        }, 5000);
+      }
     } catch (err) {
       console.error('❌ Failed to delete message:', err);
     }
