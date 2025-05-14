@@ -1,76 +1,77 @@
+// index.js
+import express from 'express';
 import { Client, GatewayIntentBits, Partials, Events } from 'discord.js';
 import dotenv from 'dotenv';
+
+// Load environment variables
 dotenv.config();
 
-// Initialize the client
+// Express setup for Render (keep server alive)
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.get('/', (req, res) => res.send('Bot is running'));
+app.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
+
+// Discord client setup
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages
   ],
-  partials: [Partials.Message, Partials.Channel],
+  partials: [Partials.Message, Partials.Channel, Partials.User]
 });
 
-// Config
 const CONFIG = {
-  linkRegex: /(https?:\/\/[^\s]+)/gi,
-  disallowedChannels: process.env.DISALLOWED_CHANNEL_IDS
-    ? process.env.DISALLOWED_CHANNEL_IDS.split(',').map(id => id.trim())
-    : [],
+  disallowedChannelIds: process.env.DISALLOWED_CHANNEL_IDS?.split(',') || [],
+  linkRegex: /(https?:\/\/[^\s]+)/gi
 };
 
-// Cooldown map to prevent rapid spam bypass
-const cooldown = new Map();
+const userCooldowns = new Map();
 
 client.once(Events.ClientReady, (c) => {
-  console.log(`🟢 Logged in as ${c.user.tag}`);
-  console.log(`🛑 Link deletion active in channels: ${CONFIG.disallowedChannels.join(', ') || 'None'}`);
+  console.log(`✅ Logged in as ${c.user.tag}`);
+  console.log(`🛑 Link deletion active in channels: ${CONFIG.disallowedChannelIds.join(', ')}`);
 });
 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  const userId = message.author.id;
-  const channelId = message.channelId;
+  // DM ping command
+  if (message.channel.type === 1 && message.content === '!ping') {
+    return message.reply('🏓 Pong!');
+  }
 
-  // Skip if the channel isn't in the disallowed list
-  if (!CONFIG.disallowedChannels.includes(channelId)) return;
+  const now = Date.now();
+  const cooldown = userCooldowns.get(message.author.id) || 0;
+  if (now - cooldown < 1000) return; // 1 second cooldown
+  userCooldowns.set(message.author.id, now);
 
-  // Check if message contains a link
-  if (!CONFIG.linkRegex.test(message.content)) return;
+  const isDisallowed = CONFIG.disallowedChannelIds.includes(message.channelId);
+  if (isDisallowed && CONFIG.linkRegex.test(message.content)) {
+    try {
+      await message.delete();
 
-  // Prevent user from bypassing with spam
-  if (cooldown.has(userId)) return;
+      const warning = await message.channel.send({
+        content: `${message.author}, links are not allowed here.`
+      });
 
-  try {
-    await message.delete();
+      setTimeout(() => {
+        warning.delete().catch(() => {});
+      }, 5000);
 
-    const warning = await message.channel.send({
-      content: `${message.author}, links are not allowed in this channel.`,
-    });
-
-    // Auto-delete warning after 5 seconds
-    setTimeout(() => {
-      warning.delete().catch(() => {});
-    }, 5000);
-
-    console.log(`❌ Deleted link from ${message.author.tag} in channel ${channelId}`);
-
-    // Add user to cooldown
-    cooldown.set(userId, true);
-    setTimeout(() => cooldown.delete(userId), 3000); // 3 seconds
-  } catch (err) {
-    console.error('Error handling message:', err);
+      console.log(`🧹 Deleted link from ${message.author.tag}`);
+    } catch (err) {
+      console.error('❌ Failed to delete message:', err);
+    }
   }
 });
 
-// Handle bot login
 client.login(process.env.DISCORD_TOKEN);
 
-// Optional: clean shutdown
 process.on('SIGINT', () => {
-  console.log('Shutting down bot...');
+  console.log('🛑 Bot shutting down...');
   client.destroy();
   process.exit(0);
 });
