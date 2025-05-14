@@ -1,7 +1,7 @@
 {
   "name": "dms-security",
   "version": "1.0.0",
-  "description": "Discord bot to delete links in specific channels",
+  "description": "Discord bot to delete links in specific channels and respond to commands in DM",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -13,13 +13,15 @@
     "discord",
     "bot",
     "security",
-    "moderation"
+    "moderation",
+    "link-deletion"
   ],
-  "author": "",
+  "author": "FireKid846",
   "license": "ISC",
   "dependencies": {
     "discord.js": "^14.19.3",
-    "dotenv": "^16.5.0"
+    "dotenv": "^16.5.0",
+    "express": "^4.18.4"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
