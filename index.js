@@ -1,6 +1,6 @@
 // index.js
 import express from 'express';
-import { Client, GatewayIntentBits, Partials, Events } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, Events, PermissionFlagsBits } from 'discord.js';
 import dotenv from 'dotenv';
 
 // Load environment variables
@@ -33,6 +33,11 @@ const CONFIG = {
 // This prevents the cooldown from being global across all channels
 const userChannelCooldowns = new Map();
 
+// Function to check if user is an admin
+function isAdmin(member) {
+  return member.permissions.has(PermissionFlagsBits.Administrator);
+}
+
 client.once(Events.ClientReady, (c) => {
   console.log(`✅ Logged in as ${c.user.tag}`);
   console.log(`🛑 Link deletion active in channels: ${CONFIG.disallowedChannelIds.join(', ')}`);
@@ -55,6 +60,12 @@ client.on(Events.MessageCreate, async (message) => {
   
   // Check if message contains links
   if (linkRegex.test(message.content)) {
+    // Skip restriction for admins
+    if (message.member && isAdmin(message.member)) {
+      console.log(`👑 Admin ${message.author.tag} sent a link in ${message.channel.name} - allowed`);
+      return;
+    }
+
     // Create a unique key for each user+channel combination for cooldown
     const cooldownKey = `${message.channelId}-${message.author.id}`;
     
