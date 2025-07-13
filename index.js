@@ -1,4 +1,4 @@
-import { Client, Events, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder, REST, Routes } from 'discord.js';
+import { Client, Events, GatewayIntentBits, PermissionFlagsBits } from 'discord.js';
 import { keepAlive } from './server.js';
 
 // Create a new client instance
@@ -70,43 +70,103 @@ async function handleLinkRestriction(message) {
   return false;
 }
 
-// Slash command definitions
-const commands = [
-  new SlashCommandBuilder()
-    .setName('check')
-    .setDescription('Check and delete links from recent messages')
-    .addIntegerOption(option =>
-      option.setName('number')
-        .setDescription('Number of messages to check')
-        .setRequired(true)
-        .setMinValue(1)
-        .setMaxValue(100)
-    ),
-];
-
-// Register slash commands
-async function registerCommands() {
+async function handleCheckCommand(message) {
+  // Check if user is a bot admin
+  if (!isBotAdmin(message.author.id)) {
+    const reply = await message.reply('You do not have permission to use this command.');
+    // Delete the reply after 5 seconds
+    setTimeout(() => {
+      reply.delete().catch(err => {
+        if (err.code !== 10008) {
+          console.error('Error deleting permission warning:', err);
+        }
+      });
+    }, 5000);
+    return;
+  }
+  
+  // Parse the number from the command
+  const args = message.content.split(' ');
+  const numberOfMessages = parseInt(args[1]);
+  
+  if (isNaN(numberOfMessages) || numberOfMessages < 1 || numberOfMessages > 100) {
+    const reply = await message.reply('Please provide a valid number between 1 and 100. Example: `.check 50`');
+    setTimeout(() => {
+      reply.delete().catch(err => {
+        if (err.code !== 10008) {
+          console.error('Error deleting usage warning:', err);
+        }
+      });
+    }, 5000);
+    return;
+  }
+  
   try {
-    const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
+    // Delete the command message
+    await message.delete();
     
-    console.log('Started refreshing application (/) commands.');
+    // Send processing message
+    const processingMsg = await message.channel.send('🔍 Checking messages for links...');
     
-    await rest.put(
-      Routes.applicationCommands(client.user.id),
-      { body: commands },
-    );
+    // Fetch messages from the channel
+    const messages = await message.channel.messages.fetch({ limit: numberOfMessages });
     
-    console.log('Successfully reloaded application (/) commands.');
+    let deletedCount = 0;
+    const messagesToDelete = [];
+    
+    // Check each message for links
+    for (const [messageId, msg] of messages) {
+      // Skip bot messages
+      if (msg.author.bot) continue;
+      
+      // Reset regex index for fresh test
+      linkRegex.lastIndex = 0;
+      
+      if (linkRegex.test(msg.content)) {
+        // Don't delete links from admins
+        if (msg.member && isAdmin(msg.member)) {
+          console.log(`👑 Skipping admin link from ${msg.author.tag}`);
+          continue;
+        }
+        
+        messagesToDelete.push(msg);
+      }
+    }
+    
+    // Delete messages with links (with small delay to avoid rate limits)
+    for (const msg of messagesToDelete) {
+      try {
+        await msg.delete();
+        deletedCount++;
+        console.log(`🧹 Deleted link from ${msg.author.tag} during cleanup`);
+        
+        // Small delay to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        console.error(`Error deleting message from ${msg.author.tag}:`, error);
+      }
+    }
+    
+    // Delete processing message
+    await processingMsg.delete();
+    
+    // Send completion message
+    const completionMessage = deletedCount > 0 
+      ? `Deleted all links, please do not send links here again. Action performed by ${message.author.displayName}`
+      : `No links found in the last ${numberOfMessages} messages.`;
+    
+    await message.channel.send(completionMessage);
+    
+    console.log(`✅ Cleanup complete. Deleted ${deletedCount} messages with links.`);
+    
   } catch (error) {
-    console.error('Error registering commands:', error);
+    console.error('Error during link cleanup:', error);
+    await message.channel.send('An error occurred while checking messages.');
   }
 }
 
-client.once(Events.ClientReady, async c => {
+client.once(Events.ClientReady, c => {
   console.log(`✅ Ready! Logged in as ${c.user.tag}`);
-  
-  // Register slash commands
-  await registerCommands();
   
   const disallowedChannels = (process.env.DISALLOWED_CHANNEL_IDS || '').split(',').map(id => id.trim());
   if (disallowedChannels.length > 0 && disallowedChannels[0] !== '') {
@@ -125,6 +185,12 @@ client.on(Events.MessageCreate, async message => {
   // Skip bot messages
   if (message.author.bot) return;
   
+  // Handle .check command
+  if (message.content.startsWith('.check')) {
+    await handleCheckCommand(message);
+    return;
+  }
+  
   // Handle link restriction
   await handleLinkRestriction(message);
 });
@@ -135,84 +201,6 @@ client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
   
   // Handle link restriction on edited messages
   await handleLinkRestriction(newMessage);
-});
-
-// Handle slash commands
-client.on(Events.InteractionCreate, async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-  
-  if (interaction.commandName === 'check') {
-    // Check if user is a bot admin
-    if (!isBotAdmin(interaction.user.id)) {
-      await interaction.reply({
-        content: 'You do not have permission to use this command.',
-        ephemeral: true
-      });
-      return;
-    }
-    
-    const numberOfMessages = interaction.options.getInteger('number');
-    
-    await interaction.deferReply();
-    
-    try {
-      // Fetch messages from the channel
-      const messages = await interaction.channel.messages.fetch({ limit: numberOfMessages });
-      
-      let deletedCount = 0;
-      const messagesToDelete = [];
-      
-      // Check each message for links
-      for (const [messageId, message] of messages) {
-        // Skip bot messages
-        if (message.author.bot) continue;
-        
-        // Reset regex index for fresh test
-        linkRegex.lastIndex = 0;
-        
-        if (linkRegex.test(message.content)) {
-          // Don't delete links from admins
-          if (message.member && isAdmin(message.member)) {
-            console.log(`👑 Skipping admin link from ${message.author.tag}`);
-            continue;
-          }
-          
-          messagesToDelete.push(message);
-        }
-      }
-      
-      // Delete messages with links (with small delay to avoid rate limits)
-      for (const message of messagesToDelete) {
-        try {
-          await message.delete();
-          deletedCount++;
-          console.log(`🧹 Deleted link from ${message.author.tag} during cleanup`);
-          
-          // Small delay to avoid rate limits
-          await new Promise(resolve => setTimeout(resolve, 100));
-        } catch (error) {
-          console.error(`Error deleting message from ${message.author.tag}:`, error);
-        }
-      }
-      
-      // Send completion message
-      const completionMessage = deletedCount > 0 
-        ? `Deleted all links, please do not send links here again. Action performed by ${interaction.user.displayName}`
-        : `No links found in the last ${numberOfMessages} messages.`;
-      
-      await interaction.editReply({
-        content: completionMessage
-      });
-      
-      console.log(`✅ Cleanup complete. Deleted ${deletedCount} messages with links.`);
-      
-    } catch (error) {
-      console.error('Error during link cleanup:', error);
-      await interaction.editReply({
-        content: 'An error occurred while checking messages.'
-      });
-    }
-  }
 });
 
 // Keep the server alive (for hosting platforms like Replit)
