@@ -70,6 +70,91 @@ async function handleLinkRestriction(message) {
   return false;
 }
 
+async function handleDeleteCommand(message) {
+  // Check if user is a bot admin
+  if (!isBotAdmin(message.author.id)) {
+    const reply = await message.reply('You do not have permission to use this command.');
+    // Delete the reply after 5 seconds
+    setTimeout(() => {
+      reply.delete().catch(err => {
+        if (err.code !== 10008) {
+          console.error('Error deleting permission warning:', err);
+        }
+      });
+    }, 5000);
+    return;
+  }
+  
+  // Parse the number from the command
+  const args = message.content.split(' ');
+  const numberOfMessages = parseInt(args[1]);
+  
+  if (isNaN(numberOfMessages) || numberOfMessages < 1 || numberOfMessages > 100) {
+    const reply = await message.reply('Please provide a valid number between 1 and 100. Example: `.dlt 25`');
+    setTimeout(() => {
+      reply.delete().catch(err => {
+        if (err.code !== 10008) {
+          console.error('Error deleting usage warning:', err);
+        }
+      });
+    }, 5000);
+    return;
+  }
+  
+  try {
+    // Delete the command message
+    await message.delete();
+    
+    // Send processing message
+    const processingMsg = await message.channel.send('🗑️ Deleting messages...');
+    
+    // Fetch messages from the channel
+    const messages = await message.channel.messages.fetch({ limit: numberOfMessages });
+    
+    let deletedCount = 0;
+    
+    // Delete messages (with small delay to avoid rate limits)
+    for (const [messageId, msg] of messages) {
+      // Skip bot messages
+      if (msg.author.bot) continue;
+      
+      try {
+        await msg.delete();
+        deletedCount++;
+        console.log(`🗑️ Deleted message from ${msg.author.tag} during batch deletion`);
+        
+        // Small delay to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        console.error(`Error deleting message from ${msg.author.tag}:`, error);
+      }
+    }
+    
+    // Delete processing message
+    await processingMsg.delete();
+    
+    // Send completion message
+    const completionMessage = `Deleted ${deletedCount} messages. Action performed by ${message.author.displayName}`;
+    
+    const confirmationMsg = await message.channel.send(completionMessage);
+    
+    // Delete confirmation message after 5 seconds
+    setTimeout(() => {
+      confirmationMsg.delete().catch(err => {
+        if (err.code !== 10008) {
+          console.error('Error deleting confirmation message:', err);
+        }
+      });
+    }, 5000);
+    
+    console.log(`✅ Batch deletion complete. Deleted ${deletedCount} messages.`);
+    
+  } catch (error) {
+    console.error('Error during batch deletion:', error);
+    await message.channel.send('An error occurred while deleting messages.');
+  }
+}
+
 async function handleCheckCommand(message) {
   // Check if user is a bot admin
   if (!isBotAdmin(message.author.id)) {
@@ -184,6 +269,12 @@ client.once(Events.ClientReady, c => {
 client.on(Events.MessageCreate, async message => {
   // Skip bot messages
   if (message.author.bot) return;
+  
+  // Handle .dlt command
+  if (message.content.startsWith('.dlt')) {
+    await handleDeleteCommand(message);
+    return;
+  }
   
   // Handle .check command
   if (message.content.startsWith('.check')) {
